@@ -81,7 +81,7 @@ jobs:
           }
           
           # 安装 repo 工具到系统目录
-          sudo curl https://storage.googleapis.com/git-repo-downloads/repo > /usr/local/bin/repo
+          curl https://storage.googleapis.com/git-repo-downloads/repo | sudo tee /usr/local/bin/repo > /dev/null
           sudo chmod a+x /usr/local/bin/repo
           # 验证 repo 安装
           which repo
