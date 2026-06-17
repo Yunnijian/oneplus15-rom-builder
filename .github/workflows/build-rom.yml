@@ -1,0 +1,348 @@
+name: Build ROM
+
+on:
+  push:
+    branches: [ main, develop ]
+  pull_request:
+    branches: [ main ]
+  workflow_dispatch:
+    inputs:
+      rom_type:
+        description: 'ROM 类型'
+        required: true
+        default: 'lineage'
+        type: choice
+        options:
+          - lineage
+          - pixel
+          - aosp
+      build_variant:
+        description: '构建变体'
+        required: true
+        default: 'userdebug'
+        type: choice
+        options:
+          - userdebug
+          - eng
+          - user
+
+env:
+  ROM_NAME: lineage
+  DEVICE: plk110
+  ANDROID_VERSION: 14
+  BUILD_NUMBER: ${{ github.run_number }}
+  BUILD_DATE: $(date +%Y%m%d_%H%M%S)
+
+jobs:
+  check-device-tree:
+    name: 检查设备树
+    runs-on: ubuntu-latest
+    steps:
+      - name: 检出代码
+        uses: actions/checkout@v4
+        
+      - name: 检查设备树文件
+        run: |
+          echo "检查设备树文件是否存在..."
+          if [ ! -d "device/oneplus/plk110" ]; then
+            echo "错误：设备树目录不存在"
+            exit 1
+          fi
+          
+          if [ ! -f "device/oneplus/plk110/AndroidProducts.mk" ]; then
+            echo "错误：AndroidProducts.mk 文件不存在"
+            exit 1
+          fi
+          
+          echo "设备树检查通过！"
+
+  setup-environment:
+    name: 设置构建环境
+    runs-on: ubuntu-latest
+    needs: check-device-tree
+    steps:
+      - name: 检出代码
+        uses: actions/checkout@v4
+        
+      - name: 安装依赖
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y \
+            git-core gnupg flex bison build-essential zip curl \
+            zlib1g-dev libc6-dev-i386 libncurses5 x11proto-core-dev \
+            libx11-dev lib32z1-dev libgl1-mesa-dev libxml2-utils \
+            xsltproc unzip fontconfig python3 python3-pip \
+            python3-venv python-is-python3 ccache
+            
+      - name: 设置 Git 配置
+        run: |
+          git config --global user.email "builder@example.com"
+          git config --global user.name "ROM Builder"
+          git config --global color.ui true
+          
+      - name: 创建构建目录
+        run: |
+          mkdir -p /home/runner/rom-build
+          cd /home/runner/rom-build
+          
+          # 初始化 ROM 源码
+          repo init -u https://github.com/LineageOS/android.git \
+            -b lineage-21.0 \
+            --depth=1
+            
+      - name: 同步源码
+        run: |
+          cd /home/runner/rom-build
+          repo sync -c -j$(nproc --all) --force-sync --no-clone-bundle --no-tags
+
+  build-rom:
+    name: 构建 ROM
+    runs-on: ubuntu-latest
+    needs: setup-environment
+    timeout-minutes: 480  # 8小时超时
+    steps:
+      - name: 检出代码
+        uses: actions/checkout@v4
+        
+      - name: 复制设备树
+        run: |
+          # 复制设备树到构建目录
+          cp -r device/oneplus/plk110 /home/runner/rom-build/device/oneplus/
+          
+          # 复制内核文件（如果有）
+          if [ -d "kernel/oneplus/plk110" ]; then
+            cp -r kernel/oneplus/plk110 /home/runner/rom-build/kernel/oneplus/
+          fi
+          
+          # 复制厂商文件（如果有）
+          if [ -d "vendor/oneplus/plk110" ]; then
+            cp -r vendor/oneplus/plk110 /home/runner/rom-build/vendor/oneplus/
+          fi
+          
+      - name: 设置构建环境
+        run: |
+          cd /home/runner/rom-build
+          
+          # 设置环境变量
+          export USE_CCACHE=1
+          export CCACHE_DIR=/home/runner/.ccache
+          export CCACHE_EXEC=$(which ccache)
+          
+          # 设置 ccache
+          ccache -M 50G
+          
+          # 设置构建环境
+          source build/envsetup.sh
+          
+          # 选择设备
+          lunch lineage_plk110-userdebug
+          
+      - name: 开始构建
+        run: |
+          cd /home/runner/rom-build
+          
+          # 开始构建
+          echo "开始构建 ROM..."
+          echo "构建时间: $(date)"
+          
+          # 使用 mka 构建
+          mka bacon -j$(nproc --all)
+          
+      - name: 收集构建产物
+        run: |
+          cd /home/runner/rom-build
+          
+          # 创建输出目录
+          mkdir -p /home/runner/rom-output
+          
+          # 复制构建产物
+          if [ -d "out/target/product/plk110" ]; then
+            cp -r out/target/product/plk110/* /home/runner/rom-output/
+          fi
+          
+          # 生成构建信息
+          cat > /home/runner/rom-output/build_info.txt << EOF
+          ROM 构建信息
+          ============
+          设备: OnePlus 15 (PLK110)
+          ROM: LineageOS 21
+          构建时间: $(date)
+          构建编号: ${BUILD_NUMBER}
+          构建变体: userdebug
+          构建分支: $(git branch --show-current)
+          EOF
+          
+      - name: 上传构建产物
+        uses: actions/upload-artifact@v4
+        with:
+          name: lineage-plk110-${{ github.run_number }}
+          path: /home/runner/rom-output/
+          retention-days: 30
+
+  test-rom:
+    name: 测试 ROM
+    runs-on: ubuntu-latest
+    needs: build-rom
+    steps:
+      - name: 下载构建产物
+        uses: actions/download-artifact@v4
+        with:
+          name: lineage-plk110-${{ github.run_number }}
+          
+      - name: 检查构建产物
+        run: |
+          echo "检查构建产物..."
+          ls -la
+          
+          # 检查主要文件是否存在
+          if [ -f "lineage-21.0-*-plk110.zip" ]; then
+            echo "ROM 文件存在"
+          else
+            echo "错误：ROM 文件不存在"
+            exit 1
+          fi
+          
+          # 检查文件大小
+          rom_file=$(ls lineage-21.0-*-plk110.zip 2>/dev/null | head -1)
+          if [ -n "$rom_file" ]; then
+            rom_size=$(stat -f%z "$rom_file" 2>/dev/null || stat -c%s "$rom_file" 2>/dev/null)
+            echo "ROM 文件大小: $rom_size bytes"
+            
+            # 检查文件大小是否合理（至少 500MB）
+            if [ "$rom_size" -lt 524288000 ]; then
+              echo "警告：ROM 文件大小可能过小"
+            fi
+          fi
+          
+      - name: 验证签名
+        run: |
+          # 验证 ROM 签名
+          echo "验证 ROM 签名..."
+          
+          rom_file=$(ls lineage-21.0-*-plk110.zip 2>/dev/null | head -1)
+          if [ -n "$rom_file" ]; then
+            # 检查 ZIP 文件完整性
+            unzip -t "$rom_file" > /dev/null 2>&1
+            if [ $? -eq 0 ]; then
+              echo "ROM 文件完整性检查通过"
+            else
+              echo "错误：ROM 文件损坏"
+              exit 1
+            fi
+          fi
+
+  create-release:
+    name: 创建发布
+    runs-on: ubuntu-latest
+    needs: test-rom
+    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+    steps:
+      - name: 检出代码
+        uses: actions/checkout@v4
+        
+      - name: 下载构建产物
+        uses: actions/download-artifact@v4
+        with:
+          name: lineage-plk110-${{ github.run_number }}
+          
+      - name: 准备发布文件
+        run: |
+          # 重命名文件
+          rom_file=$(ls lineage-21.0-*-plk110.zip 2>/dev/null | head -1)
+          if [ -n "$rom_file" ]; then
+            new_name="LineageOS-21.0-PLK110-$(date +%Y%m%d).zip"
+            mv "$rom_file" "$new_name"
+            
+            # 创建校验和
+            sha256sum "$new_name" > "${new_name}.sha256"
+            md5sum "$new_name" > "${new_name}.md5"
+          fi
+          
+      - name: 创建 GitHub Release
+        uses: actions/create-release@v1
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        with:
+          tag_name: v${{ github.run_number }}
+          release_name: LineageOS 21.0 for PLK110 - Build ${{ github.run_number }}
+          body: |
+            ## LineageOS 21.0 for OnePlus 15 (PLK110)
+            
+            ### 构建信息
+            - **构建时间**: $(date)
+            - **构建编号**: ${{ github.run_number }}
+            - **设备**: OnePlus 15 (PLK110)
+            - **ROM 版本**: LineageOS 21.0
+            
+            ### 下载文件
+            - ROM 文件: `LineageOS-21.0-PLK110-$(date +%Y%m%d).zip`
+            - SHA256 校验和: `LineageOS-21.0-PLK110-$(date +%Y%m%d).zip.sha256`
+            - MD5 校验和: `LineageOS-21.0-PLK110-$(date +%Y%m%d).zip.md5`
+            
+            ### 安装说明
+            1. 解锁 Bootloader
+            2. 刷入自定义 Recovery (如 TWRP)
+            3. 备份当前系统
+            4. 刷入 ROM
+            5. 刷入 GApps (可选)
+            6. 重启系统
+            
+            ### 已知问题
+            - 暂无已知问题
+            
+            ### 注意事项
+            - 这是开发版本，可能存在未知问题
+            - 请确保备份重要数据
+            - 刷机有风险，请谨慎操作
+          draft: false
+          prerelease: false
+          
+      - name: 上传 Release 文件
+        uses: actions/upload-release-asset@v1
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        with:
+          upload_url: ${{ steps.create_release.outputs.upload_url }}
+          asset_path: ./LineageOS-21.0-PLK110-$(date +%Y%m%d).zip
+          asset_name: LineageOS-21.0-PLK110-$(date +%Y%m%d).zip
+          asset_content_type: application/zip
+          
+      - name: 上传校验和文件
+        uses: actions/upload-release-asset@v1
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        with:
+          upload_url: ${{ steps.create_release.outputs.upload_url }}
+          asset_path: ./LineageOS-21.0-PLK110-$(date +%Y%m%d).zip.sha256
+          asset_name: LineageOS-21.0-PLK110-$(date +%Y%m%d).zip.sha256
+          asset_content_type: text/plain
+          
+      - name: 上传 MD5 文件
+        uses: actions/upload-release-asset@v1
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        with:
+          upload_url: ${{ steps.create_release.outputs.upload_url }}
+          asset_path: ./LineageOS-21.0-PLK110-$(date +%Y%m%d).zip.md5
+          asset_name: LineageOS-21.0-PLK110-$(date +%Y%m%d).zip.md5
+          asset_content_type: text/plain
+
+  notify:
+    name: 发送通知
+    runs-on: ubuntu-latest
+    needs: create-release
+    if: always()
+    steps:
+      - name: 发送构建通知
+        run: |
+          echo "构建完成通知"
+          echo "构建状态: ${{ job.status }}"
+          echo "构建编号: ${{ github.run_number }}"
+          echo "设备: OnePlus 15 (PLK110)"
+          echo "ROM: LineageOS 21.0"
+          
+          # 这里可以添加邮件通知、Slack 通知等
+          # 例如：
+          # curl -X POST -H 'Content-type: application/json' \
+          #   --data '{"text":"ROM 构建完成: LineageOS 21.0 for PLK110"}' \
+          #   ${{ secrets.SLACK_WEBHOOK_URL }}
