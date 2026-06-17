@@ -235,7 +235,7 @@ jobs:
           lunch aosp_plk110-userdebug
           
       - name: 清理构建（如果需要）
-        if: github.event.inputs.clean_build == 'true'
+        if: github.event.inputs.clean_build == 'true' || github.event.inputs.clean_build == true
         run: |
           cd ${{ github.workspace }}/pixelos-build
           
