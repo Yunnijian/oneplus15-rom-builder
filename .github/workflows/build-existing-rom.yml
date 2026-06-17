@@ -1,0 +1,463 @@
+name: Build ROM with Existing Device Tree
+
+on:
+  push:
+    branches: [ main, develop ]
+  pull_request:
+    branches: [ main ]
+  workflow_dispatch:
+    inputs:
+      rom_source:
+        description: 'ROM 源码仓库'
+        required: true
+        default: 'LineageOS'
+        type: choice
+        options:
+          - LineageOS
+          - PixelExperience
+          - crDroid
+          - ArrowOS
+          - Custom
+      device_tree_repo:
+        description: '设备树仓库地址 (URL)'
+        required: true
+      device_tree_branch:
+        description: '设备树分支'
+        required: false
+        default: 'main'
+      kernel_repo:
+        description: '内核仓库地址 (URL)'
+        required: false
+      kernel_branch:
+        description: '内核分支'
+        required: false
+        default: 'main'
+      build_variant:
+        description: '构建变体'
+        required: true
+        default: 'userdebug'
+        type: choice
+        options:
+          - userdebug
+          - eng
+          - user
+
+env:
+  DEVICE: plk110
+  BUILD_NUMBER: ${{ github.run_number }}
+  BUILD_DATE: $(date +%Y%m%d_%H%M%S)
+
+jobs:
+  prepare:
+    name: 准备构建环境
+    runs-on: ubuntu-latest
+    steps:
+      - name: 检出代码
+        uses: actions/checkout@v4
+        
+      - name: 验证输入参数
+        run: |
+          echo "验证构建参数..."
+          echo "ROM 源码: ${{ github.event.inputs.rom_source }}"
+          echo "设备树仓库: ${{ github.event.inputs.device_tree_repo }}"
+          echo "内核仓库: ${{ github.event.inputs.kernel_repo }}"
+          echo "构建变体: ${{ github.event.inputs.build_variant }}"
+          
+          # 验证设备树仓库格式
+          if [[ ! "${{ github.event.inputs.device_tree_repo }}" =~ ^https?:// ]]; then
+            echo "错误：设备树仓库地址格式不正确"
+            exit 1
+          fi
+          
+          echo "参数验证通过！"
+
+  setup-build-env:
+    name: 设置构建环境
+    runs-on: ubuntu-latest
+    needs: prepare
+    steps:
+      - name: 检出代码
+        uses: actions/checkout@v4
+        
+      - name: 安装依赖
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y \
+            git-core gnupg flex bison build-essential zip curl \
+            zlib1g-dev libc6-dev-i386 libncurses5 x11proto-core-dev \
+            libx11-dev lib32z1-dev libgl1-mesa-dev libxml2-utils \
+            xsltproc unzip fontconfig python3 python3-pip \
+            python3-venv python-is-python3 ccache
+            
+      - name: 设置 Git 配置
+        run: |
+          git config --global user.email "builder@github-actions.com"
+          git config --global user.name "GitHub Actions Builder"
+          git config --global color.ui true
+          
+      - name: 创建构建目录
+        run: |
+          mkdir -p ${{ github.workspace }}/rom-build
+          mkdir -p ${{ github.workspace }}/rom-output
+
+  sync-source:
+    name: 同步 ROM 源码
+    runs-on: ubuntu-latest
+    needs: setup-build-env
+    timeout-minutes: 120  # 2小时超时
+    steps:
+      - name: 检出代码
+        uses: actions/checkout@v4
+        
+      - name: 设置 ROM 源码
+        run: |
+          cd ${{ github.workspace }}/rom-build
+          
+          # 根据选择的 ROM 源码设置
+          case "${{ github.event.inputs.rom_source }}" in
+            "LineageOS")
+              ROM_URL="https://github.com/LineageOS/android.git"
+              ROM_BRANCH="lineage-21.0"
+              ;;
+            "PixelExperience")
+              ROM_URL="https://github.com/PixelExperience/android.git"
+              ROM_BRANCH="fourteen"
+              ;;
+            "crDroid")
+              ROM_URL="https://github.com/crDroid/android.git"
+              ROM_BRANCH="14.0"
+              ;;
+            "ArrowOS")
+              ROM_URL="https://github.com/ArrowOS/android.git"
+              ROM_BRANCH="arrow-14.0"
+              ;;
+            *)
+              ROM_URL="https://github.com/LineageOS/android.git"
+              ROM_BRANCH="lineage-21.0"
+              ;;
+          esac
+          
+          echo "ROM 源码: $ROM_URL"
+          echo "ROM 分支: $ROM_BRANCH"
+          
+          # 初始化仓库
+          repo init -u $ROM_URL -b $ROM_BRANCH --depth=1
+          
+      - name: 同步源码
+        run: |
+          cd ${{ github.workspace }}/rom-build
+          
+          # 同步源码（使用较少的线程数以避免 GitHub 限制）
+          repo sync -c -j2 --force-sync --no-clone-bundle --no-tags
+          
+      - name: 缓存源码
+        uses: actions/cache@v4
+        with:
+          path: ${{ github.workspace }}/rom-build
+          key: rom-source-${{ github.event.inputs.rom_source }}-${{ github.run_number }}
+          restore-keys: |
+            rom-source-${{ github.event.inputs.rom_source }}-
+
+  add-device-tree:
+    name: 添加设备树
+    runs-on: ubuntu-latest
+    needs: sync-source
+    steps:
+      - name: 检出代码
+        uses: actions/checkout@v4
+        
+      - name: 克隆设备树
+        run: |
+          cd ${{ github.workspace }}/rom-build
+          
+          # 克隆设备树
+          git clone --depth=1 -b ${{ github.event.inputs.device_tree_branch }} \
+            ${{ github.event.inputs.device_tree_repo }} \
+            device/oneplus/plk110
+            
+          # 检查设备树文件
+          if [ ! -f "device/oneplus/plk110/AndroidProducts.mk" ]; then
+            echo "警告：AndroidProducts.mk 文件不存在，尝试查找其他配置文件..."
+            
+            # 尝试查找其他配置文件
+            if [ -f "device/oneplus/plk110/lineage_plk110.mk" ]; then
+              echo "找到 lineage_plk110.mk"
+            elif [ -f "device/oneplus/plk110/Android.mk" ]; then
+              echo "找到 Android.mk"
+            else
+              echo "错误：设备树配置文件缺失"
+              ls -la device/oneplus/plk110/
+              exit 1
+            fi
+          fi
+          
+          echo "设备树添加成功！"
+          
+      - name: 克隆内核（如果提供）
+        run: |
+          if [ -n "${{ github.event.inputs.kernel_repo }}" ]; then
+            cd ${{ github.workspace }}/rom-build
+            
+            echo "克隆内核源码..."
+            git clone --depth=1 -b ${{ github.event.inputs.kernel_branch }} \
+              ${{ github.event.inputs.kernel_repo }} \
+              kernel/oneplus/plk110
+              
+            echo "内核源码添加成功！"
+          else
+            echo "未提供内核仓库，跳过..."
+          fi
+          
+      - name: 缓存设备树
+        uses: actions/cache@v4
+        with:
+          path: ${{ github.workspace }}/rom-build/device/oneplus/plk110
+          key: device-tree-${{ github.run_number }}
+          restore-keys: |
+            device-tree-
+
+  build:
+    name: 构建 ROM
+    runs-on: ubuntu-latest
+    needs: add-device-tree
+    timeout-minutes: 480  # 8小时超时
+    steps:
+      - name: 检出代码
+        uses: actions/checkout@v4
+        
+      - name: 恢复缓存
+        uses: actions/cache/restore@v4
+        with:
+          path: ${{ github.workspace }}/rom-build
+          key: rom-source-${{ github.event.inputs.rom_source }}-${{ github.run_number }}
+          
+      - name: 设置构建环境
+        run: |
+          cd ${{ github.workspace }}/rom-build
+          
+          # 设置环境变量
+          export USE_CCACHE=1
+          export CCACHE_DIR=${{ github.workspace }}/.ccache
+          export CCACHE_EXEC=$(which ccache)
+          
+          # 设置 ccache
+          ccache -M 50G
+          
+          # 设置构建环境
+          source build/envsetup.sh
+          
+          # 根据 ROM 类型选择设备
+          case "${{ github.event.inputs.rom_source }}" in
+            "LineageOS")
+              lunch lineage_plk110-userdebug
+              ;;
+            "PixelExperience")
+              lunch aosp_plk110-userdebug
+              ;;
+            *)
+              lunch lineage_plk110-userdebug
+              ;;
+          esac
+          
+      - name: 开始构建
+        run: |
+          cd ${{ github.workspace }}/rom-build
+          
+          echo "开始构建 ROM..."
+          echo "构建时间: $(date)"
+          echo "设备: OnePlus 15 (PLK110)"
+          echo "ROM 源码: ${{ github.event.inputs.rom_source }}"
+          
+          # 开始构建
+          mka bacon -j$(nproc --all)
+          
+      - name: 收集构建产物
+        run: |
+          cd ${{ github.workspace }}/rom-build
+          
+          # 创建输出目录
+          mkdir -p ${{ github.workspace }}/rom-output
+          
+          # 复制构建产物
+          if [ -d "out/target/product/plk110" ]; then
+            cp -r out/target/product/plk110/* ${{ github.workspace }}/rom-output/
+          fi
+          
+          # 生成构建信息
+          cat &gt; ${{ github.workspace }}/rom-output/build_info.txt &lt;&lt; EOF
+          ROM 构建信息
+          ============
+          设备: OnePlus 15 (PLK110)
+          ROM: ${{ github.event.inputs.rom_source }}
+          构建时间: $(date)
+          构建编号: ${BUILD_NUMBER}
+          构建变体: ${{ github.event.inputs.build_variant }}
+          设备树仓库: ${{ github.event.inputs.device_tree_repo }}
+          内核仓库: ${{ github.event.inputs.kernel_repo }}
+          EOF
+          
+      - name: 上传构建产物
+        uses: actions/upload-artifact@v4
+        with:
+          name: rom-plk110-${{ github.run_number }}
+          path: ${{ github.workspace }}/rom-output/
+          retention-days: 30
+
+  test:
+    name: 测试构建结果
+    runs-on: ubuntu-latest
+    needs: build
+    steps:
+      - name: 检出代码
+        uses: actions/checkout@v4
+        
+      - name: 下载构建产物
+        uses: actions/download-artifact@v4
+        with:
+          name: rom-plk110-${{ github.run_number }}
+          
+      - name: 验证构建产物
+        run: |
+          echo "验证构建产物..."
+          ls -la
+          
+          # 检查主要文件
+          rom_file=$(ls *.zip 2>/dev/null | head -1)
+          if [ -n "$rom_file" ]; then
+            echo "ROM 文件存在: $rom_file"
+            
+            # 检查文件大小
+            rom_size=$(stat -c%s "$rom_file" 2>/dev/null || stat -f%z "$rom_file" 2>/dev/null)
+            echo "ROM 文件大小: $rom_size bytes"
+            
+            # 检查文件大小是否合理（至少 500MB）
+            if [ "$rom_size" -lt 524288000 ]; then
+              echo "警告：ROM 文件大小可能过小"
+            fi
+            
+            # 验证 ZIP 文件完整性
+            unzip -t "$rom_file" &gt; /dev/null 2>&1
+            if [ $? -eq 0 ]; then
+              echo "ROM 文件完整性检查通过"
+            else
+              echo "错误：ROM 文件损坏"
+              exit 1
+            fi
+          else
+            echo "错误：未找到 ROM 文件"
+            exit 1
+          fi
+
+  release:
+    name: 创建发布
+    runs-on: ubuntu-latest
+    needs: test
+    if: github.event_name == 'push' &amp;&amp; github.ref == 'refs/heads/main'
+    steps:
+      - name: 检出代码
+        uses: actions/checkout@v4
+        
+      - name: 下载构建产物
+        uses: actions/download-artifact@v4
+        with:
+          name: rom-plk110-${{ github.run_number }}
+          
+      - name: 准备发布文件
+        run: |
+          # 重命名文件
+          rom_file=$(ls *.zip 2>/dev/null | head -1)
+          if [ -n "$rom_file" ]; then
+            # 获取 ROM 名称
+            rom_name=$(echo "$rom_file" | sed 's/\.zip$//')
+            new_name="${rom_name}-$(date +%Y%m%d).zip"
+            mv "$rom_file" "$new_name"
+            
+            # 创建校验和
+            sha256sum "$new_name" &gt; "${new_name}.sha256"
+            md5sum "$new_name" &gt; "${new_name}.md5"
+          fi
+          
+      - name: 创建 GitHub Release
+        uses: actions/create-release@v1
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        with:
+          tag_name: v${{ github.run_number }}
+          release_name: ${{ github.event.inputs.rom_source }} for PLK110 - Build ${{ github.run_number }}
+          body: |
+            ## ${{ github.event.inputs.rom_source }} for OnePlus 15 (PLK110)
+            
+            ### 构建信息
+            - **构建时间**: $(date)
+            - **构建编号**: ${{ github.run_number }}
+            - **设备**: OnePlus 15 (PLK110)
+            - **ROM 版本**: ${{ github.event.inputs.rom_source }}
+            - **设备树仓库**: ${{ github.event.inputs.device_tree_repo }}
+            - **内核仓库**: ${{ github.event.inputs.kernel_repo }}
+            
+            ### 下载文件
+            - ROM 文件: `${new_name}`
+            - SHA256 校验和: `${new_name}.sha256`
+            - MD5 校验和: `${new_name}.md5`
+            
+            ### 安装说明
+            1. 解锁 Bootloader
+            2. 刷入自定义 Recovery (如 TWRP)
+            3. 备份当前系统
+            4. 刷入 ROM
+            5. 刷入 GApps (可选)
+            6. 重启系统
+            
+            ### 已知问题
+            - 暂无已知问题
+            
+            ### 注意事项
+            - 这是开发版本，可能存在未知问题
+            - 请确保备份重要数据
+            - 刷机有风险，请谨慎操作
+          draft: false
+          prerelease: false
+          
+      - name: 上传 Release 文件
+        uses: actions/upload-release-asset@v1
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        with:
+          upload_url: ${{ steps.create_release.outputs.upload_url }}
+          asset_path: ./${new_name}
+          asset_name: ${new_name}
+          asset_content_type: application/zip
+          
+      - name: 上传校验和文件
+        uses: actions/upload-release-asset@v1
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        with:
+          upload_url: ${{ steps.create_release.outputs.upload_url }}
+          asset_path: ./${new_name}.sha256
+          asset_name: ${new_name}.sha256
+          asset_content_type: text/plain
+          
+      - name: 上传 MD5 文件
+        uses: actions/upload-release-asset@v1
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        with:
+          upload_url: ${{ steps.create_release.outputs.upload_url }}
+          asset_path: ./${new_name}.md5
+          asset_name: ${new_name}.md5
+          asset_content_type: text/plain
+
+  cleanup:
+    name: 清理工作区
+    runs-on: ubuntu-latest
+    needs: release
+    if: always()
+    steps:
+      - name: 清理构建目录
+        run: |
+          echo "清理构建目录..."
+          rm -rf ${{ github.workspace }}/rom-build
+          rm -rf ${{ github.workspace }}/rom-output
+          rm -rf ${{ github.workspace }}/.ccache
+          echo "清理完成！"
