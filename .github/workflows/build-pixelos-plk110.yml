@@ -58,6 +58,14 @@ jobs:
           echo "内核分支: ${{ env.KERNEL_BRANCH }}"
           echo ""
           echo "参数检查完成！"
+          
+      - name: 检查磁盘空间
+        run: |
+          echo "=== 磁盘空间检查 ==="
+          df -h
+          echo ""
+          echo "可用空间: $(df -h / | awk 'NR==2 {print $4}')"
+          echo "总空间: $(df -h / | awk 'NR==2 {print $2}')"
 
   setup-build-env:
     name: 设置构建环境
@@ -67,6 +75,44 @@ jobs:
       - name: 检出代码
         uses: actions/checkout@v4
         
+      - name: 清理磁盘空间
+        run: |
+          echo "=== 清理磁盘空间 ==="
+          # 删除不需要的软件包
+          sudo apt-get purge -y \
+            dotnet-* \
+            aspnetcore-* \
+            php* \
+            mongodb-* \
+            mysql-* \
+            google-chrome-* \
+            firefox-* \
+            powershell-* \
+            azure-* \
+            llvm-* \
+            clang-* \
+            lld-* \
+            lldb-* || true
+          
+          sudo apt-get autoremove -y
+          sudo apt-get clean
+          
+          # 删除不需要的目录
+          sudo rm -rf /usr/share/dotnet
+          sudo rm -rf /usr/local/lib/android
+          sudo rm -rf /opt/ghc
+          sudo rm -rf /opt/hostedtoolcache
+          sudo rm -rf /usr/local/share/boost
+          sudo rm -rf /usr/local/graalvm
+          sudo rm -rf /usr/local/share/chromium
+          sudo rm -rf /usr/local/share/powershell
+          
+          # 清理日志
+          sudo journalctl --vacuum-time=1d
+          
+          echo "=== 清理完成 ==="
+          df -h
+          
       - name: 安装依赖
         run: |
           sudo apt-get update
@@ -132,9 +178,14 @@ jobs:
           
           echo "开始同步 PixelOS 源码..."
           echo "这可能需要较长时间..."
+          echo "当前磁盘空间:"
+          df -h
           
-          # 同步源码（使用 python3 显式调用）
-          python3 /usr/local/bin/repo sync -c -j2 --force-sync --no-clone-bundle --no-tags
+          # 同步源码（使用浅克隆减少空间占用）
+          python3 /usr/local/bin/repo sync -c -j2 --force-sync --no-clone-bundle --no-tags --depth=1
+          
+          echo "同步完成，当前磁盘空间:"
+          df -h
           
       - name: 缓存 PixelOS 源码
         uses: actions/cache@v4
