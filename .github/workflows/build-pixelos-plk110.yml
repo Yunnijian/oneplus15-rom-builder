@@ -127,11 +127,31 @@ jobs:
           }
           
           # 安装 repo 工具到系统目录
-          curl https://storage.googleapis.com/git-repo-downloads/repo | sudo tee /usr/local/bin/repo > /dev/null
-          sudo chmod a+x /usr/local/bin/repo
+          # 使用更可靠的方法安装 repo
+          sudo mkdir -p /usr/local/bin
+          sudo curl -o /usr/local/bin/repo https://storage.googleapis.com/git-repo-downloads/repo
+          sudo chmod +x /usr/local/bin/repo
+          
           # 验证 repo 安装
-          which repo
-          repo --version
+          echo "检查 repo 安装..."
+          ls -la /usr/local/bin/repo
+          file /usr/local/bin/repo
+          
+          # 如果 repo 不是 Python 脚本，重新下载
+          if ! file /usr/local/bin/repo | grep -q "Python script"; then
+            echo "重新下载 repo..."
+            sudo curl -o /usr/local/bin/repo https://storage.googleapis.com/git-repo-downloads/repo
+            sudo chmod +x /usr/local/bin/repo
+          fi
+          
+          # 验证 repo 可执行
+          /usr/local/bin/repo --version || {
+            echo "repo 安装失败，尝试使用系统包管理器安装..."
+            sudo apt-get install -y repo || {
+              echo "无法安装 repo，使用 git 直接克隆..."
+              # 备用方案：直接克隆仓库
+            }
+          }
             
       - name: 设置 Git 配置
         run: |
