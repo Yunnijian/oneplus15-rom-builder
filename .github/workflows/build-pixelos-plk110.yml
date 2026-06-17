@@ -344,7 +344,7 @@ jobs:
     name: 创建发布
     runs-on: ubuntu-latest
     needs: test-pixelos
-    if: github.event_name == 'push' &amp;&amp; github.ref == 'refs/heads/main'
+    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
     steps:
       - name: 检出代码
         uses: actions/checkout@v4
@@ -363,8 +363,8 @@ jobs:
             mv "$rom_file" "$new_name"
             
             # 创建校验和
-            sha256sum "$new_name" &gt; "${new_name}.sha256"
-            md5sum "$new_name" &gt; "${new_name}.md5"
+            sha256sum "$new_name" > "${new_name}.sha256"
+            md5sum "$new_name" > "${new_name}.md5"
           fi
           
       - name: 创建 GitHub Release
