@@ -181,8 +181,8 @@ jobs:
           echo "当前磁盘空间:"
           df -h
           
-          # 同步源码（使用浅克隆减少空间占用）
-          python3 /usr/local/bin/repo sync -c -j2 --force-sync --no-clone-bundle --no-tags --depth=1
+          # 同步源码（不使用 --depth 参数，因为 repo sync 不支持）
+          python3 /usr/local/bin/repo sync -c -j2 --force-sync --no-clone-bundle --no-tags
           
           echo "同步完成，当前磁盘空间:"
           df -h
