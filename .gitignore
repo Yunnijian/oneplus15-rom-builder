@@ -1,0 +1,86 @@
+# Git 忽略文件
+*.log
+*.tmp
+*.temp
+build/
+output/
+.cache/
+.ccache/
+*.o
+*.a
+*.so
+*.dylib
+*.dll
+*.exe
+*.bin
+*.img
+*.zip
+*.tar.gz
+*.tar.bz2
+*.tar.xz
+*.7z
+*.rar
+*.deb
+*.rpm
+*.dmg
+*.iso
+*.jar
+*.war
+*.ear
+*.apk
+*.aab
+*.aab
+*.aab
+
+# IDE 和编辑器文件
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+.DS_Store
+Thumbs.db
+
+# 构建产物
+out/
+target/
+build/
+dist/
+*.class
+*.pyc
+__pycache__/
+
+# 依赖目录
+node_modules/
+vendor/
+packages/
+bower_components/
+
+# 日志文件
+*.log
+logs/
+log/
+
+# 临时文件
+tmp/
+temp/
+.tmp/
+.temp/
+
+# 配置文件（可能包含敏感信息）
+.env
+.env.local
+.env.*.local
+config.local.*
+*.local
+
+# 缓存文件
+.cache/
+.ccache/
+*.cache
+
+# 系统文件
+.DS_Store
+Thumbs.db
+ehthumbs.db
+Desktop.ini
