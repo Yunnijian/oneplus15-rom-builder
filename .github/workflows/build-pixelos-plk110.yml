@@ -108,6 +108,8 @@ jobs:
         
       - name: 初始化 PixelOS 仓库
         run: |
+          # 创建构建目录
+          mkdir -p ${{ github.workspace }}/pixelos-build
           cd ${{ github.workspace }}/pixelos-build
           
           echo "初始化 PixelOS 仓库..."
