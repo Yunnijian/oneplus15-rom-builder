@@ -1,0 +1,476 @@
+name: Build PixelOS for OnePlus 15 (PLK110)
+
+on:
+  push:
+    branches: [ main, develop ]
+  pull_request:
+    branches: [ main ]
+  workflow_dispatch:
+    inputs:
+      build_variant:
+        description: '构建变体'
+        required: true
+        default: 'userdebug'
+        type: choice
+        options:
+          - userdebug
+          - eng
+          - user
+      clean_build:
+        description: '是否清理构建'
+        required: false
+        default: false
+        type: boolean
+
+env:
+  DEVICE: plk110
+  ROM_NAME: pixelos
+  BUILD_NUMBER: ${{ github.run_number }}
+  BUILD_DATE: $(date +%Y%m%d_%H%M%S)
+  
+  # 仓库配置
+  PIXELOS_REPO: https://github.com/PixelOS-AOSP
+  PIXELOS_BRANCH: fourteen
+  DEVICE_TREE_REPO: https://github.com/OnePlus-SM8850-Development
+  DEVICE_TREE_BRANCH: main
+  KERNEL_REPO: https://github.com/OnePlus-SM8850-Development/android_device_oneplus_infiniti-kernel
+  KERNEL_BRANCH: main
+
+jobs:
+  check-inputs:
+    name: 检查输入参数
+    runs-on: ubuntu-latest
+    steps:
+      - name: 检查输入
+        run: |
+          echo "=== 构建参数 ==="
+          echo "设备: OnePlus 15 (PLK110)"
+          echo "ROM: PixelOS"
+          echo "构建变体: ${{ github.event.inputs.build_variant }}"
+          echo "清理构建: ${{ github.event.inputs.clean_build }}"
+          echo ""
+          echo "=== 仓库配置 ==="
+          echo "PixelOS 仓库: ${{ env.PIXELOS_REPO }}"
+          echo "PixelOS 分支: ${{ env.PIXELOS_BRANCH }}"
+          echo "设备树仓库: ${{ env.DEVICE_TREE_REPO }}"
+          echo "设备树分支: ${{ env.DEVICE_TREE_BRANCH }}"
+          echo "内核仓库: ${{ env.KERNEL_REPO }}"
+          echo "内核分支: ${{ env.KERNEL_BRANCH }}"
+          echo ""
+          echo "参数检查完成！"
+
+  setup-build-env:
+    name: 设置构建环境
+    runs-on: ubuntu-latest
+    needs: check-inputs
+    steps:
+      - name: 检出代码
+        uses: actions/checkout@v4
+        
+      - name: 安装依赖
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y \
+            git-core gnupg flex bison build-essential zip curl \
+            zlib1g-dev libc6-dev-i386 libncurses5 x11proto-core-dev \
+            libx11-dev lib32z1-dev libgl1-mesa-dev libxml2-utils \
+            xsltproc unzip fontconfig python3 python3-pip \
+            python3-venv python-is-python3 ccache
+            
+      - name: 设置 Git 配置
+        run: |
+          git config --global user.email "builder@github-actions.com"
+          git config --global user.name "PixelOS Builder"
+          git config --global color.ui true
+          
+      - name: 创建构建目录
+        run: |
+          mkdir -p ${{ github.workspace }}/pixelos-build
+          mkdir -p ${{ github.workspace }}/pixelos-output
+
+  sync-pixelos:
+    name: 同步 PixelOS 源码
+    runs-on: ubuntu-latest
+    needs: setup-build-env
+    timeout-minutes: 180  # 3小时超时
+    steps:
+      - name: 检出代码
+        uses: actions/checkout@v4
+        
+      - name: 初始化 PixelOS 仓库
+        run: |
+          cd ${{ github.workspace }}/pixelos-build
+          
+          echo "初始化 PixelOS 仓库..."
+          echo "仓库: ${{ env.PIXELOS_REPO }}"
+          echo "分支: ${{ env.PIXELOS_BRANCH }}"
+          
+          # 初始化 PixelOS 仓库
+          repo init -u ${{ env.PIXELOS_REPO }} -b ${{ env.PIXELOS_BRANCH }} --depth=1
+          
+      - name: 同步源码
+        run: |
+          cd ${{ github.workspace }}/pixelos-build
+          
+          echo "开始同步 PixelOS 源码..."
+          echo "这可能需要较长时间..."
+          
+          # 同步源码（使用较少的线程数以避免 GitHub 限制）
+          repo sync -c -j2 --force-sync --no-clone-bundle --no-tags
+          
+      - name: 缓存 PixelOS 源码
+        uses: actions/cache@v4
+        with:
+          path: ${{ github.workspace }}/pixelos-build
+          key: pixelos-source-${{ github.run_number }}
+          restore-keys: |
+            pixelos-source-
+
+  add-device-tree:
+    name: 添加设备树和内核
+    runs-on: ubuntu-latest
+    needs: sync-pixelos
+    steps:
+      - name: 检出代码
+        uses: actions/checkout@v4
+        
+      - name: 克隆设备树
+        run: |
+          cd ${{ github.workspace }}/pixelos-build
+          
+          echo "克隆设备树..."
+          echo "仓库: ${{ env.DEVICE_TREE_REPO }}"
+          echo "分支: ${{ env.DEVICE_TREE_BRANCH }}"
+          
+          # 克隆设备树
+          git clone --depth=1 -b ${{ env.DEVICE_TREE_BRANCH }} \
+            ${{ env.DEVICE_TREE_REPO }} \
+            device/oneplus/plk110
+            
+          # 检查设备树文件
+          if [ ! -f "device/oneplus/plk110/AndroidProducts.mk" ]; then
+            echo "警告：AndroidProducts.mk 文件不存在"
+            echo "尝试查找其他配置文件..."
+            
+            # 列出设备树目录内容
+            echo "设备树目录内容:"
+            ls -la device/oneplus/plk110/
+            
+            # 尝试查找其他配置文件
+            if [ -f "device/oneplus/plk110/lineage_plk110.mk" ]; then
+              echo "找到 lineage_plk110.mk"
+            elif [ -f "device/oneplus/plk110/Android.mk" ]; then
+              echo "找到 Android.mk"
+            else
+              echo "错误：设备树配置文件缺失"
+              exit 1
+            fi
+          fi
+          
+          echo "设备树添加成功！"
+          
+      - name: 克隆内核源码
+        run: |
+          cd ${{ github.workspace }}/pixelos-build
+          
+          echo "克隆内核源码..."
+          echo "仓库: ${{ env.KERNEL_REPO }}"
+          echo "分支: ${{ env.KERNEL_BRANCH }}"
+          
+          # 克隆内核源码
+          git clone --depth=1 -b ${{ env.KERNEL_BRANCH }} \
+            ${{ env.KERNEL_REPO }} \
+            kernel/oneplus/plk110
+            
+          # 检查内核文件
+          if [ ! -f "kernel/oneplus/plk110/Makefile" ]; then
+            echo "警告：内核 Makefile 不存在"
+            echo "内核目录内容:"
+            ls -la kernel/oneplus/plk110/
+          fi
+          
+          echo "内核源码添加成功！"
+          
+      - name: 缓存设备树和内核
+        uses: actions/cache@v4
+        with:
+          path: |
+            ${{ github.workspace }}/pixelos-build/device/oneplus/plk110
+            ${{ github.workspace }}/pixelos-build/kernel/oneplus/plk110
+          key: device-kernel-${{ github.run_number }}
+          restore-keys: |
+            device-kernel-
+
+  build-pixelos:
+    name: 构建 PixelOS
+    runs-on: ubuntu-latest
+    needs: add-device-tree
+    timeout-minutes: 480  # 8小时超时
+    steps:
+      - name: 检出代码
+        uses: actions/checkout@v4
+        
+      - name: 恢复缓存
+        uses: actions/cache/restore@v4
+        with:
+          path: ${{ github.workspace }}/pixelos-build
+          key: pixelos-source-${{ github.run_number }}
+          
+      - name: 设置构建环境
+        run: |
+          cd ${{ github.workspace }}/pixelos-build
+          
+          # 设置环境变量
+          export USE_CCACHE=1
+          export CCACHE_DIR=${{ github.workspace }}/.ccache
+          export CCACHE_EXEC=$(which ccache)
+          
+          # 设置 ccache
+          ccache -M 50G
+          
+          # 设置构建环境
+          source build/envsetup.sh
+          
+          # 选择设备
+          lunch aosp_plk110-userdebug
+          
+      - name: 清理构建（如果需要）
+        if: ${{ github.event.inputs.clean_build }} == 'true'
+        run: |
+          cd ${{ github.workspace }}/pixelos-build
+          
+          echo "执行清理构建..."
+          mka clean
+          
+      - name: 开始构建
+        run: |
+          cd ${{ github.workspace }}/pixelos-build
+          
+          echo "开始构建 PixelOS..."
+          echo "构建时间: $(date)"
+          echo "设备: OnePlus 15 (PLK110)"
+          echo "ROM: PixelOS"
+          echo "构建变体: ${{ github.event.inputs.build_variant }}"
+          
+          # 开始构建
+          mka bacon -j$(nproc --all)
+          
+      - name: 收集构建产物
+        run: |
+          cd ${{ github.workspace }}/pixelos-build
+          
+          # 创建输出目录
+          mkdir -p ${{ github.workspace }}/pixelos-output
+          
+          # 复制构建产物
+          if [ -d "out/target/product/plk110" ]; then
+            cp -r out/target/product/plk110/* ${{ github.workspace }}/pixelos-output/
+          fi
+          
+          # 生成构建信息
+          cat &gt; ${{ github.workspace }}/pixelos-output/build_info.txt &lt;&lt; EOF
+          PixelOS 构建信息
+          ================
+          设备: OnePlus 15 (PLK110)
+          ROM: PixelOS
+          构建时间: $(date)
+          构建编号: ${BUILD_NUMBER}
+          构建变体: ${{ github.event.inputs.build_variant }}
+          设备树仓库: ${{ env.DEVICE_TREE_REPO }}
+          内核仓库: ${{ env.KERNEL_REPO }}
+          PixelOS 仓库: ${{ env.PIXELOS_REPO }}
+          EOF
+          
+      - name: 上传构建产物
+        uses: actions/upload-artifact@v4
+        with:
+          name: pixelos-plk110-${{ github.run_number }}
+          path: ${{ github.workspace }}/pixelos-output/
+          retention-days: 30
+
+  test-pixelos:
+    name: 测试构建结果
+    runs-on: ubuntu-latest
+    needs: build-pixelos
+    steps:
+      - name: 检出代码
+        uses: actions/checkout@v4
+        
+      - name: 下载构建产物
+        uses: actions/download-artifact@v4
+        with:
+          name: pixelos-plk110-${{ github.run_number }}
+          
+      - name: 验证构建产物
+        run: |
+          echo "验证 PixelOS 构建产物..."
+          ls -la
+          
+          # 检查主要文件
+          rom_file=$(ls *.zip 2>/dev/null | head -1)
+          if [ -n "$rom_file" ]; then
+            echo "PixelOS 文件存在: $rom_file"
+            
+            # 检查文件大小
+            rom_size=$(stat -c%s "$rom_file" 2>/dev/null || stat -f%z "$rom_file" 2>/dev/null)
+            echo "文件大小: $rom_size bytes"
+            
+            # 检查文件大小是否合理（至少 500MB）
+            if [ "$rom_size" -lt 524288000 ]; then
+              echo "警告：文件大小可能过小"
+            fi
+            
+            # 验证 ZIP 文件完整性
+            unzip -t "$rom_file" &gt; /dev/null 2>&1
+            if [ $? -eq 0 ]; then
+              echo "文件完整性检查通过"
+            else
+              echo "错误：文件损坏"
+              exit 1
+            fi
+          else
+            echo "错误：未找到 PixelOS 文件"
+            exit 1
+          fi
+          
+      - name: 检查构建信息
+        run: |
+          if [ -f "build_info.txt" ]; then
+            echo "构建信息:"
+            cat build_info.txt
+          fi
+
+  create-release:
+    name: 创建发布
+    runs-on: ubuntu-latest
+    needs: test-pixelos
+    if: github.event_name == 'push' &amp;&amp; github.ref == 'refs/heads/main'
+    steps:
+      - name: 检出代码
+        uses: actions/checkout@v4
+        
+      - name: 下载构建产物
+        uses: actions/download-artifact@v4
+        with:
+          name: pixelos-plk110-${{ github.run_number }}
+          
+      - name: 准备发布文件
+        run: |
+          # 重命名文件
+          rom_file=$(ls *.zip 2>/dev/null | head -1)
+          if [ -n "$rom_file" ]; then
+            new_name="PixelOS-14.0-PLK110-$(date +%Y%m%d).zip"
+            mv "$rom_file" "$new_name"
+            
+            # 创建校验和
+            sha256sum "$new_name" &gt; "${new_name}.sha256"
+            md5sum "$new_name" &gt; "${new_name}.md5"
+          fi
+          
+      - name: 创建 GitHub Release
+        uses: actions/create-release@v1
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        with:
+          tag_name: v${{ github.run_number }}
+          release_name: PixelOS 14.0 for OnePlus 15 (PLK110) - Build ${{ github.run_number }}
+          body: |
+            ## PixelOS 14.0 for OnePlus 15 (PLK110)
+            
+            ### 构建信息
+            - **构建时间**: $(date)
+            - **构建编号**: ${{ github.run_number }}
+            - **设备**: OnePlus 15 (PLK110)
+            - **ROM 版本**: PixelOS 14.0
+            - **设备树仓库**: ${{ env.DEVICE_TREE_REPO }}
+            - **内核仓库**: ${{ env.KERNEL_REPO }}
+            - **PixelOS 仓库**: ${{ env.PIXELOS_REPO }}
+            
+            ### 下载文件
+            - ROM 文件: `PixelOS-14.0-PLK110-$(date +%Y%m%d).zip`
+            - SHA256 校验和: `PixelOS-14.0-PLK110-$(date +%Y%m%d).zip.sha256`
+            - MD5 校验和: `PixelOS-14.0-PLK110-$(date +%Y%m%d).zip.md5`
+            
+            ### 安装说明
+            1. 解锁 Bootloader
+            2. 刷入自定义 Recovery (如 TWRP)
+            3. 备份当前系统
+            4. 刷入 PixelOS ROM
+            5. 刷入 GApps (可选)
+            6. 重启系统
+            
+            ### 已知问题
+            - 暂无已知问题
+            
+            ### 注意事项
+            - 这是开发版本，可能存在未知问题
+            - 请确保备份重要数据
+            - 刷机有风险，请谨慎操作
+          draft: false
+          prerelease: false
+          
+      - name: 上传 Release 文件
+        uses: actions/upload-release-asset@v1
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        with:
+          upload_url: ${{ steps.create_release.outputs.upload_url }}
+          asset_path: ./PixelOS-14.0-PLK110-$(date +%Y%m%d).zip
+          asset_name: PixelOS-14.0-PLK110-$(date +%Y%m%d).zip
+          asset_content_type: application/zip
+          
+      - name: 上传校验和文件
+        uses: actions/upload-release-asset@v1
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        with:
+          upload_url: ${{ steps.create_release.outputs.upload_url }}
+          asset_path: ./PixelOS-14.0-PLK110-$(date +%Y%m%d).zip.sha256
+          asset_name: PixelOS-14.0-PLK110-$(date +%Y%m%d).zip.sha256
+          asset_content_type: text/plain
+          
+      - name: 上传 MD5 文件
+        uses: actions/upload-release-asset@v1
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        with:
+          upload_url: ${{ steps.create_release.outputs.upload_url }}
+          asset_path: ./PixelOS-14.0-PLK110-$(date +%Y%m%d).zip.md5
+          asset_name: PixelOS-14.0-PLK110-$(date +%Y%m%d).zip.md5
+          asset_content_type: text/plain
+
+  cleanup:
+    name: 清理工作区
+    runs-on: ubuntu-latest
+    needs: create-release
+    if: always()
+    steps:
+      - name: 清理构建目录
+        run: |
+          echo "清理构建目录..."
+          rm -rf ${{ github.workspace }}/pixelos-build
+          rm -rf ${{ github.workspace }}/pixelos-output
+          rm -rf ${{ github.workspace }}/.ccache
+          echo "清理完成！"
+
+  notify:
+    name: 发送通知
+    runs-on: ubuntu-latest
+    needs: cleanup
+    if: always()
+    steps:
+      - name: 发送构建通知
+        run: |
+          echo "PixelOS 构建完成通知"
+          echo "构建状态: ${{ job.status }}"
+          echo "构建编号: ${{ github.run_number }}"
+          echo "设备: OnePlus 15 (PLK110)"
+          echo "ROM: PixelOS 14.0"
+          echo "设备树仓库: ${{ env.DEVICE_TREE_REPO }}"
+          echo "内核仓库: ${{ env.KERNEL_REPO }}"
+          
+          # 这里可以添加邮件通知、Slack 通知等
+          # 例如：
+          # curl -X POST -H 'Content-type: application/json' \
+          #   --data '{"text":"PixelOS 构建完成: PLK110 Build ${{ github.run_number }}"}' \
+          #   ${{ secrets.SLACK_WEBHOOK_URL }}
