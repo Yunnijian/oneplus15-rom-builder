@@ -79,6 +79,12 @@ jobs:
             echo "警告：部分依赖安装失败，继续尝试..."
             sudo apt-get install -y git curl python3 ccache
           }
+          
+          # 安装 repo 工具
+          mkdir -p ~/bin
+          curl https://storage.googleapis.com/git-repo-downloads/repo > ~/bin/repo
+          chmod a+x ~/bin/repo
+          export PATH=~/bin:$PATH
             
       - name: 设置 Git 配置
         run: |
