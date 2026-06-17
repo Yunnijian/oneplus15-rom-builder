@@ -268,7 +268,7 @@ jobs:
           fi
           
           # 生成构建信息
-          cat &gt; ${{ github.workspace }}/pixelos-output/build_info.txt &lt;&lt; EOF
+          cat > ${{ github.workspace }}/pixelos-output/build_info.txt << EOF
           PixelOS 构建信息
           ================
           设备: OnePlus 15 (PLK110)
@@ -321,7 +321,7 @@ jobs:
             fi
             
             # 验证 ZIP 文件完整性
-            unzip -t "$rom_file" &gt; /dev/null 2>&1
+            unzip -t "$rom_file" > /dev/null 2>&1
             if [ $? -eq 0 ]; then
               echo "文件完整性检查通过"
             else
