@@ -107,6 +107,12 @@ jobs:
       - name: 检出代码
         uses: actions/checkout@v4
         
+      - name: 安装 repo 工具 (再次确认)
+        run: |
+          # 确保 repo 工具存在且可执行
+          curl https://storage.googleapis.com/git-repo-downloads/repo | sudo tee /usr/local/bin/repo > /dev/null
+          sudo chmod a+x /usr/local/bin/repo
+          
       - name: 初始化 PixelOS 仓库
         run: |
           # 创建构建目录
@@ -117,8 +123,8 @@ jobs:
           echo "仓库: ${{ env.PIXELOS_REPO }}"
           echo "分支: ${{ env.PIXELOS_BRANCH }}"
           
-          # 初始化 PixelOS 仓库
-          repo init -u ${{ env.PIXELOS_REPO }} -b ${{ env.PIXELOS_BRANCH }} --depth=1
+          # 初始化 PixelOS 仓库 (使用 python3 显式调用，确保执行)
+          python3 /usr/local/bin/repo init -u ${{ env.PIXELOS_REPO }} -b ${{ env.PIXELOS_BRANCH }} --depth=1
           
       - name: 同步源码
         run: |
@@ -127,8 +133,8 @@ jobs:
           echo "开始同步 PixelOS 源码..."
           echo "这可能需要较长时间..."
           
-          # 同步源码（使用较少的线程数以避免 GitHub 限制）
-          repo sync -c -j2 --force-sync --no-clone-bundle --no-tags
+          # 同步源码（使用 python3 显式调用）
+          python3 /usr/local/bin/repo sync -c -j2 --force-sync --no-clone-bundle --no-tags
           
       - name: 缓存 PixelOS 源码
         uses: actions/cache@v4
