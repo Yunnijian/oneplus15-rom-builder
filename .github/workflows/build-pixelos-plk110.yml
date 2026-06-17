@@ -31,10 +31,10 @@ env:
   # 仓库配置
   PIXELOS_REPO: https://github.com/PixelOS-AOSP/android_manifest.git
   PIXELOS_BRANCH: sixteen-qpr2
-  DEVICE_TREE_REPO: https://github.com/OnePlus-SM8850-Development
-  DEVICE_TREE_BRANCH: main
-  KERNEL_REPO: https://github.com/OnePlus-SM8850-Development/android_device_oneplus_infiniti-kernel
-  KERNEL_BRANCH: main
+  DEVICE_TREE_REPO: https://github.com/OnePlus-SM8850-Development/android_device_oneplus_infiniti.git
+  DEVICE_TREE_BRANCH: lineage-23.2
+  KERNEL_REPO: https://github.com/OnePlus-SM8850-Development/android_device_oneplus_infiniti-kernel.git
+  KERNEL_BRANCH: lineage-23.2
 
 jobs:
   check-inputs:
