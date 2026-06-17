@@ -46,8 +46,8 @@ jobs:
           echo "=== 构建参数 ==="
           echo "设备: OnePlus 15 (PLK110)"
           echo "ROM: PixelOS"
-          echo "构建变体: ${{ github.event.inputs.build_variant }}"
-          echo "清理构建: ${{ github.event.inputs.clean_build }}"
+          echo "构建变体: ${{ github.event.inputs.build_variant || 'userdebug' }}"
+          echo "清理构建: ${{ github.event.inputs.clean_build || 'false' }}"
           echo ""
           echo "=== 仓库配置 ==="
           echo "PixelOS 仓库: ${{ env.PIXELOS_REPO }}"
@@ -250,7 +250,7 @@ jobs:
           echo "构建时间: $(date)"
           echo "设备: OnePlus 15 (PLK110)"
           echo "ROM: PixelOS"
-          echo "构建变体: ${{ github.event.inputs.build_variant }}"
+          echo "构建变体: ${{ github.event.inputs.build_variant || 'userdebug' }}"
           
           # 开始构建
           mka bacon -j$(nproc --all)
